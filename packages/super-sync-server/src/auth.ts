@@ -11,10 +11,52 @@ import { authCache } from './auth-cache';
 // Auth constants
 const MIN_JWT_SECRET_LENGTH = 32;
 
-// All JWT tokens live for 365 days regardless of authentication method.
-// The auth method (passkey, magic link) only matters during login —
-// once a JWT is issued, it represents a verified session.
-export const JWT_EXPIRY = '365d';
+// JWT lifetime. Tokens live for 365 days by default regardless of authentication
+// method — the auth method (passkey, magic link) only matters during login; once
+// a JWT is issued, it represents a verified session. Self-hosted deployments can
+// override this with the JWT_EXPIRY env var (e.g. a shorter session on shared
+// machines) without rebuilding the image.
+const DEFAULT_JWT_EXPIRY = '365d';
+
+// Accepted JWT_EXPIRY timespan units (vercel/ms syntax), e.g. "365d", "12h", "90m".
+// Bare integers are handled separately and treated as seconds.
+const JWT_EXPIRY_TIMESPAN_RE =
+  /^\d+(?:\.\d+)?\s*(?:years?|yrs?|y|weeks?|w|days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s|milliseconds?|msecs?|ms)$/i;
+
+/** The validated `expiresIn` value jsonwebtoken accepts (timespan string or seconds). */
+type JwtExpiry = NonNullable<jwt.SignOptions['expiresIn']>;
+
+/**
+ * Resolve the JWT lifetime from the JWT_EXPIRY env var, falling back to 365 days.
+ *
+ * Accepts either a positive integer number of seconds (e.g. "604800") or a
+ * vercel/ms timespan string (e.g. "365d", "12h", "90m"). A bare integer is
+ * coerced to a number so jsonwebtoken treats it as seconds rather than its
+ * default of milliseconds. Invalid values throw at startup so a typo fails fast
+ * instead of surfacing later at token-signing time.
+ */
+export const getJwtExpiry = (): JwtExpiry => {
+  const raw = process.env.JWT_EXPIRY?.trim();
+  if (!raw) {
+    return DEFAULT_JWT_EXPIRY;
+  }
+  if (/^\d+$/.test(raw)) {
+    const seconds = parseInt(raw, 10);
+    if (seconds <= 0) {
+      throw new Error(`Invalid JWT_EXPIRY "${raw}": seconds must be a positive integer.`);
+    }
+    return seconds;
+  }
+  if (!JWT_EXPIRY_TIMESPAN_RE.test(raw)) {
+    throw new Error(
+      `Invalid JWT_EXPIRY "${raw}": use a positive number of seconds (e.g. "604800") ` +
+        `or a timespan string such as "365d", "12h" or "90m".`,
+    );
+  }
+  return raw as JwtExpiry;
+};
+
+export const JWT_EXPIRY = getJwtExpiry();
 
 export const VERIFICATION_TOKEN_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const MAX_VERIFICATION_RESEND_COUNT = 20;
